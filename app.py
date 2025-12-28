@@ -65,7 +65,7 @@ def profile_request(enc_uid, server, token):
         "Content-Type": "application/x-www-form-urlencoded",
         "X-Unity-Version": "2018.4.11f1",
         "X-GA": "v1 1",
-        "ReleaseVersion": "OB50"
+        "ReleaseVersion": "OB51"
     }
     try:
         r = requests.post(
@@ -90,7 +90,7 @@ async def send_like(enc_like, token, url):
         "Content-Type": "application/x-www-form-urlencoded",
         "X-Unity-Version": "2018.4.11f1",
         "X-GA": "v1 1",
-        "ReleaseVersion": "OB50"
+        "ReleaseVersion": "OB51"
     }
     try:
         async with aiohttp.ClientSession() as s:
