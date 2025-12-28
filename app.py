@@ -59,11 +59,19 @@ def profile_request(enc_uid, server, token):
         if server in {"BR", "US", "SAC", "NA"}
         else "https://clientbp.ggblueshark.com/GetPlayerPersonalShow"
     )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "Dalvik/2.1.0 (Linux; Android 9)",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-Unity-Version": "2018.4.11f1",
+        "X-GA": "v1 1",
+        "ReleaseVersion": "OB50"
+    }
     try:
         r = requests.post(
             url,
             data=bytes.fromhex(enc_uid),
-            headers={"Authorization": f"Bearer {token}"},
+            headers=headers,
             timeout=10,
             verify=False
         )
@@ -76,13 +84,17 @@ def profile_request(enc_uid, server, token):
 # ================= LIKE SPAM =================
 
 async def send_like(enc_like, token, url):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "Dalvik/2.1.0 (Linux; Android 9)",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-Unity-Version": "2018.4.11f1",
+        "X-GA": "v1 1",
+        "ReleaseVersion": "OB50"
+    }
     try:
         async with aiohttp.ClientSession() as s:
-            async with s.post(
-                url,
-                data=bytes.fromhex(enc_like),
-                headers={"Authorization": f"Bearer {token}"}
-            ):
+            async with s.post(url, data=bytes.fromhex(enc_like), headers=headers):
                 return True
     except:
         return False
@@ -100,7 +112,7 @@ async def spam_like(uid, server, tokens):
     )
 
     tasks = []
-    for i in range(50):
+    for i in range(50):  # OB 50
         token = tokens[i % len(tokens)]["token"]
         tasks.append(send_like(enc_like, token, url))
 
@@ -136,7 +148,7 @@ def like():
     if count >= KEY_LIMIT:
         return jsonify({"error": "daily limit reached"}), 429
 
-    # BEFORE
+    # BEFORE (best effort)
     before_info = profile_request(enc_uid, server, token)
     before_like = before_info.AccountInfo.Likes if before_info else -1
     nickname = before_info.AccountInfo.PlayerNickname if before_info else "unknown"
@@ -152,7 +164,7 @@ def like():
 
     time.sleep(2)
 
-    # AFTER
+    # AFTER (best effort)
     after_info = profile_request(enc_uid, server, token)
     after_like = after_info.AccountInfo.Likes if after_info else -1
 
