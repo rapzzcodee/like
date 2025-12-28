@@ -4,7 +4,6 @@ from collections import defaultdict
 from datetime import datetime
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
-from google.protobuf.json_format import MessageToJson
 
 import like_pb2
 import like_count_pb2
@@ -15,149 +14,167 @@ app = Flask(__name__)
 KEY_LIMIT = 150
 token_tracker = defaultdict(lambda: [0, time.time()])
 
-# ---------- utils ----------
-def get_today_midnight_timestamp():
+# ================= UTIL =================
+
+def midnight_ts():
     now = datetime.now()
     return datetime(now.year, now.month, now.day).timestamp()
 
-def load_tokens(server_name):
+def load_tokens(server):
     try:
-        if server_name == "ID":
-            with open("token_id.json") as f:
-                return json.load(f)
-        elif server_name in {"BR", "US", "SAC", "NA"}:
-            with open("token_br.json") as f:
-                return json.load(f)
+        if server == "ID":
+            f = "token_id.json"
+        elif server in {"BR", "US", "SAC", "NA"}:
+            f = "token_br.json"
         else:
-            with open("token_bd.json") as f:
-                return json.load(f)
+            f = "token_bd.json"
+        with open(f) as fp:
+            return json.load(fp)
     except:
         return []
 
-def encrypt_message(data):
+def encrypt(data: bytes) -> str:
     key = b'Yg&tc%DEuh6%Zc^8'
-    iv = b'6oyZDr22E3ychjM%'
-    cipher = AES.new(key, AES.MODE_CBC, iv)
-    return binascii.hexlify(cipher.encrypt(pad(data, AES.block_size))).decode()
+    iv  = b'6oyZDr22E3ychjM%'
+    aes = AES.new(key, AES.MODE_CBC, iv)
+    return binascii.hexlify(aes.encrypt(pad(data, 16))).decode()
 
-def create_uid_proto(uid):
-    msg = uid_generator_pb2.uid_generator()
-    msg.krishna_ = int(uid)
-    msg.teamXdarks = 1
-    return encrypt_message(msg.SerializeToString())
+def uid_encrypt(uid):
+    m = uid_generator_pb2.uid_generator()
+    m.krishna_ = int(uid)
+    m.teamXdarks = 1
+    return encrypt(m.SerializeToString())
 
-def decode_protobuf(binary):
+def decode_info(raw):
     try:
         info = like_count_pb2.Info()
-        info.ParseFromString(binary)
+        info.ParseFromString(raw)
         return info
     except:
         return None
 
-def make_request(enc_uid, server_name, token):
+def profile_request(enc_uid, server, token):
     url = (
         "https://client.us.freefiremobile.com/GetPlayerPersonalShow"
-        if server_name in {"BR", "US", "SAC", "NA"}
+        if server in {"BR", "US", "SAC", "NA"}
         else "https://clientbp.ggblueshark.com/GetPlayerPersonalShow"
     )
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "User-Agent": "Dalvik/2.1.0",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-
     try:
-        r = requests.post(url, data=bytes.fromhex(enc_uid), headers=headers, timeout=10, verify=False)
-        return decode_protobuf(r.content)
+        r = requests.post(
+            url,
+            data=bytes.fromhex(enc_uid),
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+            verify=False
+        )
+        if r.status_code != 200:
+            return None
+        return decode_info(r.content)
     except:
         return None
 
-async def send_like(enc_uid, token, url):
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "User-Agent": "Dalvik/2.1.0",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-    async with aiohttp.ClientSession() as s:
-        async with s.post(url, data=bytes.fromhex(enc_uid), headers=headers):
-            pass
+# ================= LIKE SPAM =================
 
-async def send_multiple(uid, server_name, url, tokens):
+async def send_like(enc_like, token, url):
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                url,
+                data=bytes.fromhex(enc_like),
+                headers={"Authorization": f"Bearer {token}"}
+            ):
+                return True
+    except:
+        return False
+
+async def spam_like(uid, server, tokens):
     proto = like_pb2.like()
     proto.uid = int(uid)
-    proto.region = server_name
-    enc = encrypt_message(proto.SerializeToString())
+    proto.region = server
+    enc_like = encrypt(proto.SerializeToString())
+
+    url = (
+        "https://client.us.freefiremobile.com/LikeProfile"
+        if server in {"BR", "US", "SAC", "NA"}
+        else "https://clientbp.ggblueshark.com/LikeProfile"
+    )
 
     tasks = []
     for i in range(50):
-        tasks.append(send_like(enc, tokens[i % len(tokens)]["token"], url))
-    await asyncio.gather(*tasks)
+        token = tokens[i % len(tokens)]["token"]
+        tasks.append(send_like(enc_like, token, url))
 
-# ---------- route ----------
+    results = await asyncio.gather(*tasks)
+    return sum(1 for r in results if r)
+
+# ================= ROUTE =================
+
 @app.route("/like", methods=["GET"])
 def like():
     uid = request.args.get("uid")
-    server_name = request.args.get("server_name", "").upper()
+    server = request.args.get("server_name", "").upper()
     key = request.args.get("key")
 
     if key != "jenil":
         return jsonify({"error": "invalid api key"}), 403
-    if not uid or not server_name:
+    if not uid or not server:
         return jsonify({"error": "uid & server_name required"}), 400
 
-    tokens = load_tokens(server_name)
+    tokens = load_tokens(server)
     if not tokens:
-        return jsonify({"error": "token file missing"}), 500
+        return jsonify({"error": "token file not found"}), 500
 
     token = tokens[0]["token"]
-    enc_uid = create_uid_proto(uid)
+    enc_uid = uid_encrypt(uid)
 
-    today = get_today_midnight_timestamp()
+    # rate limit
+    today = midnight_ts()
     count, last = token_tracker[token]
     if last < today:
         token_tracker[token] = [0, time.time()]
         count = 0
     if count >= KEY_LIMIT:
-        return jsonify({"error": "limit reached"}), 429
+        return jsonify({"error": "daily limit reached"}), 429
 
-    before = make_request(enc_uid, server_name, token)
-    if before is None:
-        return jsonify({"error": "failed fetch before"}), 502
+    # BEFORE
+    before_info = profile_request(enc_uid, server, token)
+    before_like = before_info.AccountInfo.Likes if before_info else -1
+    nickname = before_info.AccountInfo.PlayerNickname if before_info else "unknown"
 
-    before_like = before.AccountInfo.Likes
-
-    like_url = (
-        "https://client.us.freefiremobile.com/LikeProfile"
-        if server_name in {"BR", "US", "SAC", "NA"}
-        else "https://clientbp.ggblueshark.com/LikeProfile"
-    )
-
+    # SPAM LIKE
     try:
         loop = asyncio.get_event_loop()
     except:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-    loop.run_until_complete(send_multiple(uid, server_name, like_url, tokens))
+    success_like = loop.run_until_complete(spam_like(uid, server, tokens))
 
-    after = make_request(enc_uid, server_name, token)
-    if after is None:
-        return jsonify({"error": "failed fetch after"}), 502
+    time.sleep(2)
 
-    after_like = after.AccountInfo.Likes
-    given = after_like - before_like
+    # AFTER
+    after_info = profile_request(enc_uid, server, token)
+    after_like = after_info.AccountInfo.Likes if after_info else -1
+
+    # RESULT
+    if before_like != -1 and after_like != -1:
+        given = after_like - before_like
+        mode = "real"
+    else:
+        given = success_like
+        mode = "estimate"
 
     if given > 0:
         token_tracker[token][0] += 1
         count += 1
 
     return jsonify({
-        "UID": after.AccountInfo.UID,
-        "PlayerNickname": after.AccountInfo.PlayerNickname,
+        "UID": int(uid),
+        "PlayerNickname": nickname,
         "LikesBefore": before_like,
         "LikesAfter": after_like,
         "LikesGiven": given,
+        "mode": mode,
         "remains": f"({KEY_LIMIT-count}/{KEY_LIMIT})"
     })
 
